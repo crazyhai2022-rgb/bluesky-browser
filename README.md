@@ -9,19 +9,25 @@ A privacy-focused desktop browser with separate **containers** (isolated session
 - **Containers**: create, edit, rename, duplicate (settings only), pin, search, sort, delete. Each container has its own persistent Electron session partition, so cookies, localStorage, IndexedDB, cache and service workers are separate.
 - **Per-container proxy** (HTTP / HTTPS / SOCKS5): saved per container. No direct fallback in the proxy rules, so an unreachable proxy makes pages fail instead of connecting directly. The proxy host is validated so extra rules cannot be smuggled in.
 - **Password vault**: AES-256-GCM encrypted file, key protected by the OS (Windows DPAPI / macOS Keychain via Electron `safeStorage`) or by a master password (scrypt). Auto-lock, exact-origin matching, cross-container use off by default, encrypted backup and restore.
-- **Browser shell**: tabs, address bar, back/forward/reload, container picker, Containers and Passwords panels. Only `http(s)` pages can be opened in a tab. Web pages get no Node access (sandbox on, context isolation on) and all site permissions are denied by default.
+- **Browser shell**: tabs, address bar, back/forward/reload, container picker, Containers and Passwords panels. Only `http(s)` pages can be opened in a tab. Web pages get no Node access (sandbox on, context isolation on) and site permissions are asked per container and site (default Block).
+- **Settings panel** (⚙ Settings): privacy dashboard with live counters, toggles for ad blocking, tracker blocking (incl. Meta Pixel), YouTube ad blocking, third-party cookie blocking, HTTPS-first, pop-up blocking, Do Not Track / GPC and WebRTC local-IP limit; camera/mic/location/notification defaults; search engine, homepage, reopen tabs on startup, zoom, spell check; vault auto-lock; clear all browsing data. Everything saves instantly.
 
 ## Not built yet
 
 - Autofill and "save password?" prompts in web pages (the vault itself is ready)
-- Tracker blocking, cookie controls, permission prompts, HTTPS-first, download warnings, privacy dashboard
-- Bookmarks, history, downloads, session restore
+- Download warnings
+- Bookmarks, history, downloads manager
 - Proxy username/password login and live connection status (it only shows "configured")
 - React UI (the shell is plain JS for now)
 - SQLite storage (containers are stored in a JSON file for now)
 - Windows `.exe` and macOS `.dmg` installers, code signing, auto-update
 
 ## Honest limits
+
+- Ad/tracker blocking uses a small built-in domain list, not full uBlock-style filter lists, so some ads will still show.
+- YouTube ad blocking (request blocking + hiding + auto-skip) may miss ads when YouTube changes; it is untested against live YouTube here.
+- Blocking is not anonymity: containers do not change your IP or fingerprint.
+- Ad-management consoles (ads.google.com, business.facebook.com) are deliberately not blocked.
 
 Containers separate browser storage. They do **not** hide your device fingerprint, and they do not change your IP address by themselves (that needs a separate proxy per container). A proxy does not make you anonymous or stop websites from linking sessions. This project does not try to evade any platform's rules or security checks; follow each platform's terms.
 

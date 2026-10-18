@@ -92,6 +92,7 @@ function askText({ title, label, type = 'text', ok = 'OK', note = '', minLength 
 // ---------------------------------------------------------------- panels
 
 function closePanel() {
+  if (currentPanel && currentPanel.timer) clearInterval(currentPanel.timer);
   currentPanel = null;
   panelEl.classList.remove('open');
   panelEl.replaceChildren();
@@ -102,7 +103,8 @@ window.closePanel = closePanel;
 
 function openPanel(name, build) {
   closeModal();
-  currentPanel = { name, refresh: null };
+  if (currentPanel && currentPanel.timer) clearInterval(currentPanel.timer);
+  currentPanel = { name, refresh: null, timer: null };
   panelEl.classList.add('open');
   window.bsb.ui.panel(true);
   currentPanel.refresh = build();
@@ -416,5 +418,123 @@ window.bsb.vault.onLocked(() => {
   if (currentPanel && currentPanel.name === 'vault' && vaultRender) { closeModal(); vaultRender(); }
 });
 
+// ---------------------------------------------------------------- settings and privacy dashboard
+
+function showSettings() {
+  openPanel('settings', () => {
+    const body = h('div', { class: 'pbody' });
+    const saved = h('span', { class: 'saved', 'aria-live': 'polite' });
+    let flash = null;
+    const markSaved = () => {
+      saved.textContent = '✓ Saved';
+      clearTimeout(flash);
+      flash = setTimeout(() => { saved.textContent = ''; }, 1500);
+    };
+    // Every control saves the moment it changes: there is no Save button.
+    const save = async (patch) => {
+      try { const r = await window.bsb.settings.set(patch); markSaved(); return r; }
+      catch (e) { saved.textContent = errMsg(e); return null; }
+    };
+    const row = (label, desc, control) =>
+      h('label', { class: 'srow' }, h('div', { class: 'stext' }, h('b', {}, label), desc ? h('small', {}, desc) : null), control);
+    const toggle = (label, desc, key, value) => {
+      const box = h('input', { type: 'checkbox', checked: value });
+      box.addEventListener('change', () => save({ [key]: box.checked }));
+      return row(label, desc, h('span', { class: 'switch' }, box, h('i')));
+    };
+    const pick = (label, desc, options, value, onChange) => {
+      const sel = h('select', {}, options.map(([v, t]) => h('option', { value: v }, t)));
+      sel.value = String(value);
+      sel.addEventListener('change', () => onChange(sel.value));
+      return row(label, desc, sel);
+    };
+
+    const tiles = h('div', { class: 'tiles' });
+    const tileInfo = [
+      ['ads', 'Ads blocked', 't1'], ['trackers', 'Trackers blocked', 't2'], ['youtubeAds', 'YouTube ad requests blocked', 't3'],
+      ['httpsUpgrades', 'Upgraded to HTTPS', 't4'], ['popups', 'Pop-ups blocked', 't5'], ['cookiesStripped', 'Third-party cookies stripped', 't6'],
+    ];
+    const updateTiles = async () => {
+      try {
+        const st = await window.bsb.privacy.stats();
+        tiles.replaceChildren(...tileInfo.map(([k, t, cls]) => h('div', { class: `tile ${cls}` }, h('b', {}, st[k] ?? 0), h('span', {}, t))));
+      } catch { /* panel closed */ }
+    };
+    currentPanel.timer = setInterval(updateTiles, 4000);
+    updateTiles();
+
+    panelEl.replaceChildren(panelHead('⚙ Settings', saved), body);
+
+    window.bsb.settings.get().then(({ settings: s, engines, zoomChoices, autoLockChoices }) => {
+      const hp = h('input', { class: 'input', value: s.homepage, placeholder: 'Blank, or https://example.com' });
+      const hpNote = h('div', { class: 'error' });
+      hp.addEventListener('change', async () => {
+        const raw = hp.value.trim();
+        const r = await save({ homepage: raw });
+        if (r) { hp.value = r.homepage; hpNote.textContent = raw && !r.homepage ? 'Only http and https web addresses are allowed.' : ''; }
+      });
+      const permOpts = [['ask', 'Ask me'], ['allow', 'Allow'], ['block', 'Block']];
+      const setPerm = (k) => (v) => save({ permissions: { [k]: v } });
+      const resetNote = h('small', {});
+      const syncCount = async () => {
+        const st = await window.bsb.privacy.stats();
+        resetNote.textContent = `${st.savedSiteDecisions} remembered site decision${st.savedSiteDecisions === 1 ? '' : 's'}.`;
+      };
+      syncCount();
+
+      body.replaceChildren(
+        h('div', { class: 'scard' }, h('h3', {}, '🛡 Privacy dashboard'),
+          h('p', { class: 'note' }, 'Counted since the browser started. Blocking reduces tracking and ads but does not make you anonymous or stop browser fingerprinting.'),
+          tiles),
+
+        h('div', { class: 'scard' }, h('h3', {}, '🚫 Ads and trackers'),
+          toggle('Block ads', 'Blocks the big ad networks. This is a built-in list, not a full filter-list blocker like uBlock Origin, so some ads can still appear.', 'blockAds', s.blockAds),
+          toggle('Block trackers', 'Blocks analytics and tracking scripts, including the Meta Pixel. Turn this off while you test your own pixel or tags.', 'blockTrackers', s.blockTrackers),
+          toggle('Block YouTube ads', 'Blocks YouTube ad requests, hides ad boxes, clicks “Skip” and fast-forwards ads that still play. YouTube changes often, so it may miss some. Applies to pages you load after changing it.', 'blockYouTubeAds', s.blockYouTubeAds),
+          toggle('Block third-party cookies', 'Stops cookies set by other sites. Can break logins and payments that use a different domain, so it is off by default.', 'blockThirdPartyCookies', s.blockThirdPartyCookies)),
+
+        h('div', { class: 'scard' }, h('h3', {}, '🔒 Connection and privacy'),
+          toggle('HTTPS first', 'Opens http:// pages as https://. Local and private addresses are left alone. A site that has no HTTPS will fail to load while this is on.', 'httpsFirst', s.httpsFirst),
+          toggle('Block pop-ups', 'A page can only open a new tab right after you click or press a key in it.', 'blockPopups', s.blockPopups),
+          toggle('Send “Do Not Track” and Global Privacy Control', 'Asks sites not to track or sell your data. Sites may ignore it.', 'sendDoNotTrack', s.sendDoNotTrack),
+          toggle('Hide local network addresses from WebRTC', 'Stops sites from reading your local IP through video-call technology. Containers with a proxy always use the stricter setting.', 'limitWebRtc', s.limitWebRtc)),
+
+        h('div', { class: 'scard' }, h('h3', {}, '📷 Site permissions'),
+          h('p', { class: 'note' }, 'What sites may use. “Ask me” shows a question each time; you can choose to remember the answer for that site in that container.'),
+          pick('Camera', '', permOpts, s.permissions.camera, setPerm('camera')),
+          pick('Microphone', '', permOpts, s.permissions.microphone, setPerm('microphone')),
+          pick('Location', '', permOpts, s.permissions.location, setPerm('location')),
+          pick('Notifications', '', permOpts, s.permissions.notifications, setPerm('notifications')),
+          h('div', { class: 'srow', style: 'cursor:default' }, h('div', { class: 'stext' }, h('b', {}, 'Remembered site decisions'), resetNote),
+            h('button', { onclick: async () => {
+              const ok = await confirmBox({ title: 'Forget all remembered site decisions?', ok: 'Forget', danger: true, message: 'Sites will ask again the next time they want to use your camera, microphone, location or notifications.' });
+              if (ok) { await window.bsb.privacy.resetSitePermissions(); syncCount(); }
+            } }, 'Forget all'))),
+
+        h('div', { class: 'scard' }, h('h3', {}, '🌐 General'),
+          pick('Search engine', 'Used when you type words in the address bar.', engines.map((e) => [e.id, e.label]), s.searchEngine, (v) => save({ searchEngine: v })),
+          row('Homepage', 'Opens in every new tab. Leave empty for a blank tab.', h('div', {}, hp, hpNote)),
+          toggle('Reopen tabs on startup', 'Brings back the tabs you had open last time, in their own containers.', 'restoreTabs', s.restoreTabs),
+          pick('Page zoom', 'Default zoom for every page.', zoomChoices.map((z) => [z, `${z}%`]), s.zoomPercent, (v) => save({ zoomPercent: Number(v) })),
+          toggle('Spell check', 'Underlines spelling mistakes while you type.', 'spellcheck', s.spellcheck)),
+
+        h('div', { class: 'scard' }, h('h3', {}, '🔑 Password manager'),
+          pick('Lock the vault after', 'The vault locks itself after this much time without use.', autoLockChoices.map((m) => [m, `${m} minute${m === 1 ? '' : 's'}`]), s.vaultAutoLockMinutes, (v) => save({ vaultAutoLockMinutes: Number(v) }))),
+
+        h('div', { class: 'scard' }, h('h3', {}, '🧹 Browsing data'),
+          h('div', { class: 'srow', style: 'cursor:default' },
+            h('div', { class: 'stext' }, h('b', {}, 'Clear all browsing data'), h('small', {}, 'Deletes cookies, logins, site storage and cache in every container. Saved passwords in the vault are not touched. To clear one container, use Containers → Clear data.')),
+            h('button', { class: 'danger', onclick: async () => {
+              const ok = await confirmBox({ title: 'Clear browsing data in ALL containers?', ok: 'Clear everything', danger: true, message: 'You will be signed out of every site in every container. This cannot be undone.' });
+              if (!ok) return;
+              const n = await window.bsb.privacy.clearAllData();
+              await notice('Done', `Browsing data cleared in ${n} container${n === 1 ? '' : 's'}.`);
+            } }, 'Clear all'))));
+    }).catch((e) => body.replaceChildren(h('div', { class: 'empty' }, errMsg(e))));
+    return null;
+  });
+}
+
+$('btn-settings').onclick = () => (currentPanel && currentPanel.name === 'settings' ? closePanel() : showSettings());
 $('btn-containers').onclick = () => (currentPanel && currentPanel.name === 'containers' ? closePanel() : showContainers());
 $('btn-vault').onclick = () => (currentPanel && currentPanel.name === 'vault' ? closePanel() : showVault());

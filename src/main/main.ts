@@ -1,7 +1,11 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session, shell } from 'electron';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ContainerStore } from './containers';
 import { buildElectronProxy, ProxyConfig } from './network';
+import { PermissionStore, PermKind } from './permissions';
+import { applyPrivacy, attachTab, PrivacyDeps, refreshSession, refreshTab, stats } from './privacy';
+import { AUTOLOCK_CHOICES, SEARCH_ENGINES, SettingsStore, ZOOM_CHOICES } from './settings';
 import { isAllowedNavigation, normalizeInput } from './url';
 import { createVault, registerVaultIpc } from './vault-ipc';
 import type { Vault } from './vault';
@@ -19,16 +23,17 @@ interface Tab {
 let win: BrowserWindow;
 let store: ContainerStore;
 let vault: Vault;
+let settings: SettingsStore;
+let perms: PermissionStore;
+let privacyDeps: PrivacyDeps;
+let sessionFile = '';
 const tabs = new Map<number, Tab>();
 let activeTabId: number | null = null;
 let nextTabId = 1;
 let panelOpen = false; // while a shell panel is open, the active web view is detached so the panel is visible
+let saveTimer: NodeJS.Timeout | null = null;
 
-function hardenSession(ses: Electron.Session): void {
-  // Deny every permission by default. A per-container permission UI replaces this in Phase 5.
-  ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
-  ses.setPermissionCheckHandler(() => false);
-}
+const searchUrl = (): string => SEARCH_ENGINES[settings.get().searchEngine].url;
 
 async function applyProxy(containerId: string, cfg: ProxyConfig): Promise<void> {
   const c = store.get(containerId);
@@ -36,6 +41,7 @@ async function applyProxy(containerId: string, cfg: ProxyConfig): Promise<void> 
   const electronCfg = buildElectronProxy(cfg); // throws on invalid input, nothing is applied or saved
   await session.fromPartition(c.partition).setProxy(electronCfg);
   store.setProxy(containerId, cfg);
+  for (const t of tabs.values()) if (t.containerId === containerId) refreshTab(t.view.webContents, containerId, privacyDeps);
   pushState();
 }
 
@@ -47,7 +53,24 @@ function layoutActive(): void {
   t.view.setBounds({ x: 0, y: CHROME_HEIGHT, width: w, height: h - CHROME_HEIGHT });
 }
 
+/** Remembers open tabs (only when "restore tabs" is on) so they can be reopened next time. */
+function saveSessionSoon(): void {
+  if (!settings.get().restoreTabs) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const list = [...tabs.values()]
+      .map((t) => ({ containerId: t.containerId, url: t.view.webContents.getURL() }))
+      .filter((t) => /^https?:\/\//.test(t.url));
+    try {
+      fs.writeFileSync(sessionFile, JSON.stringify(list));
+    } catch {
+      /* best effort */
+    }
+  }, 800);
+}
+
 function pushState(): void {
+  if (!win || win.isDestroyed()) return;
   win.webContents.send('state', {
     containers: store.list({ sort: 'lastUsed' }),
     tabs: [...tabs.values()].map((t) => ({
@@ -58,13 +81,14 @@ function pushState(): void {
     })),
     activeTabId,
   });
+  saveSessionSoon();
 }
 
 function openTab(containerId: string, url = 'about:blank'): number {
   const c = store.get(containerId);
   if (!c) throw new Error('Container not found');
   const ses = session.fromPartition(c.partition);
-  hardenSession(ses);
+  applyPrivacy(ses, containerId, privacyDeps); // blocking, headers, permissions: once per container session
   // Apply this container's saved network route (or direct) before anything loads in it.
   const ready: Promise<void> = ses.setProxy(c.proxy ? buildElectronProxy(c.proxy) : { mode: 'direct' });
   ready.catch(() => undefined);
@@ -83,13 +107,15 @@ function openTab(containerId: string, url = 'about:blank'): number {
   store.touch(containerId);
 
   const wc = view.webContents;
+  const hooks = attachTab(wc, containerId, privacyDeps);
   // Block unsafe navigation (file:, javascript:, custom schemes)
   wc.on('will-navigate', (e, target) => {
     if (!isAllowedNavigation(target) && target !== 'about:blank') e.preventDefault();
   });
-  // New windows: only http(s), opened as a new tab in the SAME container. Never a native popup.
+  // New windows: only http(s), opened as a new tab in the SAME container, and only after a real user action
+  // when pop-up blocking is on. Never a native popup window.
   wc.setWindowOpenHandler(({ url: target }) => {
-    if (isAllowedNavigation(target)) openTab(containerId, target);
+    if (isAllowedNavigation(target) && hooks.popupAllowed()) openTab(containerId, target);
     return { action: 'deny' };
   });
   for (const ev of ['page-title-updated', 'did-navigate', 'did-navigate-in-page'] as const) {
@@ -136,6 +162,30 @@ async function wipeContainerData(partition: string): Promise<void> {
   await ses.clearAuthCache();
 }
 
+/** Native question when a site asks for camera, microphone, location or notifications. Default button is Block. */
+async function askPermission(containerId: string, origin: string, kinds: PermKind[]): Promise<{ allow: boolean; remember: boolean }> {
+  const c = store.get(containerId);
+  const r = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Permission request',
+    message: `${origin} wants to use your ${kinds.join(' and ')}`,
+    detail: `Container: ${c ? `${c.emoji} ${c.name}` : 'unknown'}. Remembered answers apply to this site in this container only.`,
+    buttons: ['Block', 'Allow', 'Block and remember', 'Allow and remember'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  return { allow: r.response === 1 || r.response === 3, remember: r.response >= 2 };
+}
+
+function applySettingsEverywhere(): void {
+  vault.setAutoLockMs(settings.get().vaultAutoLockMinutes * 60 * 1000);
+  for (const t of tabs.values()) {
+    refreshSession(t.view.webContents.session, privacyDeps);
+    refreshTab(t.view.webContents, t.containerId, privacyDeps);
+  }
+}
+
 function registerIpc(): void {
   ipcMain.handle('containers:list', (_e, opts) => store.list(opts));
   ipcMain.handle('containers:create', (_e, input) => {
@@ -157,6 +207,7 @@ function registerIpc(): void {
     for (const t of [...tabs.values()]) if (t.containerId === id) closeTab(t.id);
     const c = store.remove(id);
     await wipeContainerData(c.partition);
+    perms.reset(id);
     // Remove this container's saved credentials (entries explicitly shared across containers are kept).
     if (vault.isUnlocked()) vault.removeForContainer(id);
     pushState();
@@ -187,14 +238,34 @@ function registerIpc(): void {
     }
   });
 
+  // ---- settings and privacy dashboard
+  ipcMain.handle('settings:get', () => ({
+    settings: settings.get(),
+    engines: Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ id, label: e.label })),
+    zoomChoices: ZOOM_CHOICES,
+    autoLockChoices: AUTOLOCK_CHOICES,
+  }));
+  ipcMain.handle('settings:set', (_e, patch: unknown) => {
+    const next = settings.set(patch);
+    applySettingsEverywhere();
+    return next;
+  });
+  ipcMain.handle('privacy:stats', () => ({ ...stats, savedSiteDecisions: perms.count() }));
+  ipcMain.handle('permissions:resetAll', () => perms.reset());
+  ipcMain.handle('data:clearAll', async () => {
+    const all = store.list();
+    for (const c of all) await wipeContainerData(c.partition);
+    return all.length;
+  });
+
   ipcMain.handle('tabs:open', (_e, containerId: string, input?: string) =>
-    openTab(containerId, input ? normalizeInput(input) : 'about:blank'),
+    openTab(containerId, input ? normalizeInput(input, searchUrl()) : settings.get().homepage || 'about:blank'),
   );
   ipcMain.handle('tabs:activate', (_e, id: number) => activate(id));
   ipcMain.handle('tabs:close', (_e, id: number) => closeTab(id));
   ipcMain.handle('nav:go', (_e, input: string) => {
     const t = activeTabId !== null ? tabs.get(activeTabId) : undefined;
-    if (t) void t.ready.then(() => t.view.webContents.loadURL(normalizeInput(input))).catch(() => undefined);
+    if (t) void t.ready.then(() => t.view.webContents.loadURL(normalizeInput(input, searchUrl()))).catch(() => undefined);
   });
   ipcMain.handle('nav:back', () => activeTabId !== null && tabs.get(activeTabId)?.view.webContents.navigationHistory.goBack());
   ipcMain.handle('nav:forward', () => activeTabId !== null && tabs.get(activeTabId)?.view.webContents.navigationHistory.goForward());
@@ -203,7 +274,17 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
-  store = new ContainerStore(path.join(app.getPath('userData'), 'containers.json'));
+  const data = app.getPath('userData');
+  store = new ContainerStore(path.join(data, 'containers.json'));
+  settings = new SettingsStore(path.join(data, 'settings.json'));
+  perms = new PermissionStore(path.join(data, 'site-permissions.json'));
+  sessionFile = path.join(data, 'session.json');
+  privacyDeps = {
+    settings: () => settings.get(),
+    perms,
+    strictProxy: (containerId) => store.get(containerId)?.proxy?.enabled === true,
+    ask: askPermission,
+  };
 
   win = new BrowserWindow({
     width: 1280,
@@ -223,12 +304,26 @@ app.whenReady().then(() => {
   void win.loadFile(path.join(__dirname, '../../src/renderer/index.html'));
   win.on('resize', layoutActive);
 
-  vault = createVault(() => win.webContents.send('vault:locked'));
+  vault = createVault(() => {
+    if (!win.isDestroyed()) win.webContents.send('vault:locked');
+  });
+  vault.setAutoLockMs(settings.get().vaultAutoLockMinutes * 60 * 1000);
   registerVaultIpc(vault);
   registerIpc();
   // Create a first container so the browser is usable immediately (no account/setup required).
   if (store.list().length === 0) store.create({ name: 'Default', emoji: '🔵' });
-  win.webContents.once('did-finish-load', pushState);
+  win.webContents.once('did-finish-load', () => {
+    pushState();
+    if (!settings.get().restoreTabs) return;
+    try {
+      const saved = JSON.parse(fs.readFileSync(sessionFile, 'utf8')) as { containerId: string; url: string }[];
+      for (const t of saved.slice(0, 30)) {
+        if (store.get(t.containerId) && isAllowedNavigation(t.url)) openTab(t.containerId, t.url);
+      }
+    } catch {
+      /* nothing to restore */
+    }
+  });
 });
 
 app.on('window-all-closed', () => app.quit());
@@ -237,4 +332,4 @@ app.on('window-all-closed', () => app.quit());
 app.on('web-contents-created', (_e, wc) => {
   wc.on('will-attach-webview', (e) => e.preventDefault());
 });
-void shell; // external-link confirmation dialog is added in Phase 5
+void shell; // external-link confirmation dialog is added in a later phase

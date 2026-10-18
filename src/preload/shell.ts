@@ -18,6 +18,15 @@ contextBridge.exposeInMainWorld('bsb', {
     clearData: (id: string) => ipcRenderer.invoke('containers:clearData', id),
     setProxy: (id: string, cfg: unknown) => ipcRenderer.invoke('containers:setProxy', id, cfg),
   },
+  settings: {
+    get: () => ipcRenderer.invoke('settings:get'),
+    set: (patch: unknown) => ipcRenderer.invoke('settings:set', patch),
+  },
+  privacy: {
+    stats: () => ipcRenderer.invoke('privacy:stats'),
+    resetSitePermissions: () => ipcRenderer.invoke('permissions:resetAll'),
+    clearAllData: () => ipcRenderer.invoke('data:clearAll'),
+  },
   tabs: {
     open: (containerId: string, input?: string) => ipcRenderer.invoke('tabs:open', containerId, input),
     activate: (id: number) => ipcRenderer.invoke('tabs:activate', id),

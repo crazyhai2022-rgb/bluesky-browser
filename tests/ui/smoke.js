@@ -16,6 +16,9 @@ const containers = [
 let stateCb = null;
 let vaultExists = false, vaultUnlocked = false;
 const entries = [];
+const cfg = { searchEngine: 'duckduckgo', homepage: '', restoreTabs: true, zoomPercent: 100, spellcheck: true, blockAds: true, blockTrackers: true,
+  blockYouTubeAds: true, blockThirdPartyCookies: false, httpsFirst: true, blockPopups: true, sendDoNotTrack: true, limitWebRtc: true,
+  permissions: { camera: 'ask', microphone: 'ask', location: 'ask', notifications: 'block' }, vaultAutoLockMinutes: 5 };
 const bsb = {
   onState: (cb) => { stateCb = cb; },
   ui: { panel: async (o) => calls.push(['ui.panel', o]) },
@@ -27,6 +30,19 @@ const bsb = {
     remove: async (id) => calls.push(['remove', id]),
     clearData: async (id) => calls.push(['clearData', id]),
     setProxy: async (id, cfg) => { calls.push(['setProxy', id, cfg]); if (/[,;]/.test(cfg.host)) throw new Error("Error invoking remote method 'containers:setProxy': Error: Proxy host contains invalid characters"); },
+  },
+  settings: {
+    get: async () => ({
+      settings: { ...cfg },
+      engines: [{ id: 'duckduckgo', label: 'DuckDuckGo' }, { id: 'google', label: 'Google' }],
+      zoomChoices: [90, 100, 110], autoLockChoices: [1, 5, 15],
+    }),
+    set: async (p) => { calls.push(['settings.set', p]); Object.assign(cfg, p); return { ...cfg }; },
+  },
+  privacy: {
+    stats: async () => ({ ads: 12, trackers: 7, youtubeAds: 3, httpsUpgrades: 2, popups: 1, cookiesStripped: 0, savedSiteDecisions: 4 }),
+    resetSitePermissions: async () => calls.push(['resetPerms']),
+    clearAllData: async () => { calls.push(['clearAll']); return 2; },
   },
   tabs: { open: async (...a) => calls.push(['tabs.open', ...a]), activate: async () => {}, close: async (id) => calls.push(['tabs.close', id]) },
   nav: { go: async () => {}, back: async () => {}, forward: async () => {}, reload: async () => {} },
@@ -136,6 +152,37 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
   bsb._locked();
   await tick();
   assert.ok(d.querySelector('.vcard h3').textContent.includes('locked'));
+
+  // Settings panel: dashboard, auto-saving toggles/selects, confirmations
+  d.getElementById('btn-settings').click();
+  await tick(60);
+  assert.equal(d.querySelectorAll('.tile').length, 6);
+  assert.ok(d.querySelector('.tile').textContent.includes('12'));
+  const switches = [...d.querySelectorAll('.srow')].filter((r) => r.querySelector('.switch'));
+  const rowOf = (txt) => switches.find((r) => r.textContent.includes(txt));
+  const ytBox = rowOf('Block YouTube ads').querySelector('input');
+  assert.equal(ytBox.checked, true, 'YouTube blocking on by default');
+  ytBox.checked = false; ytBox.dispatchEvent(new w.Event('change'));
+  await tick();
+  assert.equal(JSON.stringify(calls.find((c) => c[0] === 'settings.set' && 'blockYouTubeAds' in c[1])[1]), JSON.stringify({ blockYouTubeAds: false }));
+  assert.ok(d.querySelector('.saved').textContent.includes('Saved'));
+  const cookieBox = rowOf('third-party cookies').querySelector('input');
+  assert.equal(cookieBox.checked, false);
+  const camSel = [...d.querySelectorAll('.srow')].find((r) => r.textContent.startsWith('Camera')).querySelector('select');
+  camSel.value = 'block'; camSel.dispatchEvent(new w.Event('change'));
+  await tick();
+  assert.equal(JSON.stringify(calls.find((c) => c[0] === 'settings.set' && c[1].permissions)[1]), JSON.stringify({ permissions: { camera: 'block' } }));
+  const zoomSel = [...d.querySelectorAll('.srow')].find((r) => r.textContent.startsWith('Page zoom')).querySelector('select');
+  zoomSel.value = '110'; zoomSel.dispatchEvent(new w.Event('change'));
+  await tick();
+  assert.equal(JSON.stringify(calls.find((c) => c[0] === 'settings.set' && 'zoomPercent' in c[1])[1]), JSON.stringify({ zoomPercent: 110 }));
+  // clear-all asks first
+  [...d.querySelectorAll('.scard button.danger')].find((b) => b.textContent === 'Clear all').click();
+  assert.ok(!calls.some((c) => c[0] === 'clearAll'), 'not cleared before confirm');
+  [...d.querySelectorAll('#modal button')].find((b) => b.textContent === 'Clear everything').click();
+  await tick();
+  assert.ok(calls.some((c) => c[0] === 'clearAll'));
+  [...d.querySelectorAll('#modal button')].find((b) => b.textContent === 'OK').click();
 
   // Closing the panel re-attaches the web view
   [...d.querySelectorAll('.phead button')].find((b) => b.textContent.includes('Close')).click();

@@ -78,6 +78,32 @@ td.pw { font-family:ui-monospace,Consolas,monospace; }
 .swatches button.sel { border-color:var(--blue2); background:#16224a; }
 .twocol { display:grid; grid-template-columns:1fr 110px; gap:10px; }
 
+/* ---- settings ---- */
+.scard { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; margin:0 auto 16px; max-width:860px; }
+.scard h3 { margin:0 0 4px; font-size:16px; }
+.srow { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 0; border-top:1px solid #121b33; cursor:pointer; }
+.srow:first-of-type { border-top:0; }
+.stext small { display:block; color:var(--muted); margin-top:3px; line-height:1.45; max-width:560px; }
+.srow select, .srow .input { max-width:260px; }
+.switch { position:relative; width:44px; height:24px; flex:none; }
+.switch input { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; }
+.switch i { position:absolute; inset:0; background:#2a3558; border-radius:999px; transition:background .15s; pointer-events:none; }
+.switch i::after { content:''; position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .15s; }
+.switch input:checked + i { background:linear-gradient(135deg,#2563ff,#6d4aff); }
+.switch input:checked + i::after { transform:translateX(20px); }
+.switch input:focus-visible + i { outline:2px solid var(--blue2); outline-offset:2px; }
+.saved { color:var(--ok); min-width:80px; text-align:right; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; margin-top:12px; }
+.tile { border-radius:14px; padding:14px; color:#fff; box-shadow:0 6px 20px rgba(0,0,0,.35); }
+.tile b { display:block; font-size:28px; line-height:1.1; }
+.tile span { font-size:12px; opacity:.92; }
+.t1 { background:linear-gradient(135deg,#2563ff,#5b8cff); }
+.t2 { background:linear-gradient(135deg,#9333ea,#c084fc); }
+.t3 { background:linear-gradient(135deg,#e11d48,#fb7185); }
+.t4 { background:linear-gradient(135deg,#16a34a,#4ade80); }
+.t5 { background:linear-gradient(135deg,#ea580c,#fbbf24); }
+.t6 { background:linear-gradient(135deg,#0891b2,#22d3ee); }
+
 @media (max-width: 760px) {
   #bar { flex-wrap:wrap; height:auto; }
   .grid { grid-template-columns:1fr; }
