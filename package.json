@@ -1,0 +1,22 @@
+{
+  "name": "bluesky-browser",
+  "productName": "BlueSky Browser",
+  "version": "0.1.0",
+  "description": "Privacy-focused multi-container desktop browser",
+  "main": "dist/main/main.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "build:main": "tsc -p tsconfig.json",
+    "build": "npm run build:main",
+    "start": "npm run build && electron .",
+    "test": "node --test \"dist/tests/unit/*.test.js\"",
+    "test:ui": "node tests/ui/smoke.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^33.0.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.6.0"
+  }
+}

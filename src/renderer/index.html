@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+<title>BlueSky Browser</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="chrome">
+    <div id="tabs" role="tablist" aria-label="Open tabs"></div>
+    <div id="bar">
+      <img class="logo" src="../../assets/logo.svg" alt="BlueSky Browser" />
+      <button id="back" class="iconbtn" aria-label="Back">←</button>
+      <button id="fwd" class="iconbtn" aria-label="Forward">→</button>
+      <button id="reload" class="iconbtn" aria-label="Reload">⟳</button>
+      <input id="url" placeholder="Search or enter address" aria-label="Address bar" />
+      <select id="cont" aria-label="Container for new tabs"></select>
+      <button id="newtab" class="primary" aria-label="New tab in selected container">+ Tab</button>
+      <button id="btn-containers" aria-label="Manage containers">🧩 Containers</button>
+      <button id="btn-vault" aria-label="Password manager">🔑 Passwords</button>
+    </div>
+  </div>
+
+  <section id="panel" aria-live="polite"></section>
+  <div id="modal" role="dialog" aria-modal="true"></div>
+
+  <script src="shell.js"></script>
+  <script src="panels.js"></script>
+</body>
+</html>

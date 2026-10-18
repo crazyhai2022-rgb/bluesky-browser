@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+out/
+*.log
+.env
+.env.*
+vault.json
+containers.json
+*.bsbbackup
+.DS_Store
+Thumbs.db
